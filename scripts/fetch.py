@@ -177,86 +177,15 @@ def fetch_sam_vendors() -> list:
 # ── Socrata SODA: Texas construction permits ─────────────────────────────────
 
 def fetch_austin_permits() -> list:
-    """
-    Austin construction permits via Socrata SODA.
-    Dataset: 3syk-w9eu — Issued Construction Permits
-    No $select — return all columns and filter in clean.py to avoid field-name 400s.
-    """
-    log.info("Fetching Austin construction permits...")
-    since = (datetime.utcnow() - timedelta(weeks=52)).strftime("%Y-%m-%d")
-    url = "https://data.austintexas.gov/resource/3syk-w9eu.json"
-    params = {
-        "$where": f"issued_date >= '{since}T00:00:00.000'",
-        "$order": "issued_date DESC",
-    }
-    try:
-        records = paginate_soda(url, params, limit=1000, max_pages=10)
-        for r in records:
-            r["_source_city"] = "Austin"
-        log.info(f"Austin permits: {len(records)} total")
-        return records
-    except Exception as e:
-        log.warning(f"Austin permits failed (non-critical): {e}")
-        return []
+    # Austin Socrata endpoint currently returning 400 — placeholder for future fix
+    log.info("Austin permits: skipped (endpoint under investigation)")
+    return []
 
 
 def fetch_census_building_permits() -> list:
-    """
-    US Census Bureau Building Permits Survey API (BPS).
-    Covers all Texas counties by year — no API key required, rock-solid uptime.
-    Returns annual permit counts + valuation per unit type per county.
-    Docs: https://www.census.gov/data/developers/data-sets/building-permits.html
-    """
-    log.info("Fetching Census building permits (TX counties)...")
-
-    TX_COUNTIES = {
-        "Harris":       ("48", "201"),
-        "Dallas":       ("48", "113"),
-        "Tarrant":      ("48", "439"),
-        "Travis":       ("48", "453"),
-        "Bexar":        ("48", "029"),
-        "Smith":        ("48", "423"),
-        "Gregg":        ("48", "183"),
-        "Nacogdoches":  ("48", "347"),
-        "Angelina":     ("48", "005"),
-        "Jefferson":    ("48", "245"),
-        "Orange":       ("48", "361"),
-        "Hardin":       ("48", "199"),
-        "Montgomery":   ("48", "339"),
-        "Fort Bend":    ("48", "157"),
-        "Brazoria":     ("48", "039"),
-    }
-
-    current_year = datetime.utcnow().year
-    years = [current_year - 1, current_year]
-    records = []
-
-    for county_name, (state_fips, county_fips) in TX_COUNTIES.items():
-        for year in years:
-            url = "https://api.census.gov/data/timeseries/bps/county"
-            params = {
-                "get":  "NAME,UNITS1,UNITS2,UNITS3_4,VAL1,VAL2,VAL3_4,DATE_DESC",
-                "for":  f"county:{county_fips}",
-                "in":   f"state:{state_fips}",
-                "time": str(year),
-            }
-            try:
-                resp = requests.get(url, params=params, timeout=20)
-                resp.raise_for_status()
-                rows = resp.json()
-                headers = rows[0]
-                for row in rows[1:]:
-                    r = dict(zip(headers, row))
-                    r["_county_name"] = county_name
-                    r["_source_city"] = county_name
-                    r["_source"]      = "census_bps"
-                    records.append(r)
-            except Exception as e:
-                log.warning(f"Census BPS {county_name} {year}: {e}")
-            time.sleep(0.05)
-
-    log.info(f"Census building permits: {len(records)} county-year records")
-    return records
+    # Census BPS county endpoint variable names need verification — skipping for now
+    log.info("Census BPS: skipped (pending variable name verification)")
+    return []
 
 
 def fetch_houston_permits() -> list:
@@ -289,10 +218,6 @@ def main():
     # City permits (Austin SODA) + county-level data (Census BPS)
     permits = []
     permits += fetch_austin_permits()
-
-    census = fetch_census_building_permits()
-    save("census_bps", census)
-    results["census_records"] = len(census)
 
     save("tx_permits_combined", permits)
     results["permits"] = len(permits)
