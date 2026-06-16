@@ -65,7 +65,7 @@ def get_release_urls(repo, tag):
 def get_subscribers(worker_url, worker_secret):
     resp = requests.get(
         f"{worker_url}/subs",
-        headers={"x-worker-secret": worker_secret},
+        params={"secret": worker_secret},
         timeout=20,
     )
     resp.raise_for_status()
