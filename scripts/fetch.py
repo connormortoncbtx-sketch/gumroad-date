@@ -47,23 +47,20 @@ def fetch_usaspending_download() -> list:
     start_date = end_date - timedelta(weeks=52)
 
     # Step 1: Request the download
+    # agencies is required — "all" means no agency filter applied
     resp = requests.post(
         "https://api.usaspending.gov/api/v2/bulk_download/awards/",
         json={
-            "columns": [],
             "file_format": "csv",
             "filters": {
-                "prime_and_sub_award_types": {
-                    "prime_awards": ["A", "B", "C", "D"],
-                    "sub_awards": [],
+                "agencies": [{"type": "awarding", "tier": "toptier", "name": "All"}],
+                "prime_award_types": ["A", "B", "C", "D"],
+                "date_type": "action_date",
+                "date_range": {
+                    "start_date": str(start_date),
+                    "end_date":   str(end_date),
                 },
-                "time_period": [{
-                    "date_type":   "action_date",
-                    "start_date":  str(start_date),
-                    "end_date":    str(end_date),
-                }],
                 "place_of_performance_locations": [{"country": "USA", "state": "TX"}],
-                "naics_codes": {"require": CONSTRUCTION_NAICS},
             },
         },
         timeout=60,

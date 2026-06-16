@@ -168,6 +168,19 @@ def clean_contracts(raw: list) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].apply(clean_text)
 
+    # Filter by NAICS — construction and heavy equipment codes
+    CONSTRUCTION_NAICS = {
+        "236110","236115","236116","236117","236118",
+        "236210","236220","237110","237120","237130",
+        "237210","237310","237390","238110","238120",
+        "238130","238210","238290","532412","423810",
+    }
+    if "naics_code" in df.columns:
+        before = len(df)
+        mask = df["naics_code"].astype(str).str.strip().isin(CONSTRUCTION_NAICS)
+        df = df[mask]
+        log.info(f"NAICS filter: kept {len(df):,} of {before:,} records")
+
     # Filter: keep only positive obligations >= $10k
     if "obligation_usd" in df.columns:
         before = len(df)
