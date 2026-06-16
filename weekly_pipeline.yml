@@ -1,0 +1,79 @@
+name: TX Construction Intel — Weekly Pipeline
+
+on:
+  schedule:
+    # Every Sunday at 4:00 AM UTC (11 PM Saturday CT)
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+    # Allow manual trigger from GitHub UI for testing
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run fetch.py
+        run: python scripts/fetch.py
+
+      - name: Run clean.py
+        run: python scripts/clean.py
+
+      - name: Run generate_report.py
+        run: python scripts/generate_report.py
+
+      - name: Get current date
+        id: date
+        run: echo "DATE=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: Upload data artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tx-intel-${{ steps.date.outputs.DATE }}
+          path: |
+            data/clean/
+            reports/
+          retention-days: 90
+
+      - name: Create GitHub Release with data files
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "weekly-${{ steps.date.outputs.DATE }}"
+          name: "TX Construction Intel — Week of ${{ steps.date.outputs.DATE }}"
+          body: |
+            ## Weekly Data Release
+
+            Auto-generated every Sunday. Includes:
+            - `tx_contracts_*.csv` — Federal construction contracts awarded in Texas (past 52 weeks)
+            - `tx_permits_*.csv` — Construction permits across Austin, Houston, Dallas
+            - `summary_*.json` — Aggregated stats and top projects
+            - `TX_Construction_Intel_*.pdf` — Weekly PDF digest (Tier 3)
+
+            **Data sources:** USASpending.gov, City of Austin Open Data, City of Houston Open Data, City of Dallas Open Data
+          files: |
+            data/clean/tx_contracts_${{ steps.date.outputs.DATE }}.csv
+            data/clean/tx_permits_${{ steps.date.outputs.DATE }}.csv
+            data/clean/summary_${{ steps.date.outputs.DATE }}.json
+            reports/TX_Construction_Intel_${{ steps.date.outputs.DATE }}.pdf
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Pipeline failed — check logs above"
+          # Optional: add curl to a webhook/Slack/email here later
