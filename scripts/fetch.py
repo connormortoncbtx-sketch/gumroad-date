@@ -186,7 +186,7 @@ def fetch_austin_permits() -> list:
     since = (datetime.utcnow() - timedelta(weeks=52)).strftime("%Y-%m-%d")
     url = "https://data.austintexas.gov/resource/3syk-w9eu.json"
     params = {
-        "$where": f"issued_date >= '{since}'",
+        "$where": f"issued_date >= '{since}T00:00:00.000'",
         "$order": "issued_date DESC",
     }
     try:
@@ -200,61 +200,71 @@ def fetch_austin_permits() -> list:
         return []
 
 
-def fetch_houston_permits() -> list:
+def fetch_census_building_permits() -> list:
     """
-    Houston construction permits via Socrata SODA.
-    Dataset: yqkd-96ma — Construction Permits
+    US Census Bureau Building Permits Survey API (BPS).
+    Covers all Texas counties by year — no API key required, rock-solid uptime.
+    Returns annual permit counts + valuation per unit type per county.
+    Docs: https://www.census.gov/data/developers/data-sets/building-permits.html
     """
-    log.info("Fetching Houston construction permits...")
+    log.info("Fetching Census building permits (TX counties)...")
 
-    since = (datetime.utcnow() - timedelta(weeks=52)).strftime("%Y-%m-%dT00:00:00")
-    url = "https://data.houstontx.gov/resource/yqkd-96ma.json"
-    params = {
-        "$where": f"date_issued >= '{since}'",
-        "$select": (
-            "permit_number,permit_type,work_description,date_issued,"
-            "declared_valuation,proj_area,latitude,longitude,"
-            "address,zip_code,council_district"
-        ),
-        "$order": "date_issued DESC",
+    TX_COUNTIES = {
+        "Harris":       ("48", "201"),
+        "Dallas":       ("48", "113"),
+        "Tarrant":      ("48", "439"),
+        "Travis":       ("48", "453"),
+        "Bexar":        ("48", "029"),
+        "Smith":        ("48", "423"),
+        "Gregg":        ("48", "183"),
+        "Nacogdoches":  ("48", "347"),
+        "Angelina":     ("48", "005"),
+        "Jefferson":    ("48", "245"),
+        "Orange":       ("48", "361"),
+        "Hardin":       ("48", "199"),
+        "Montgomery":   ("48", "339"),
+        "Fort Bend":    ("48", "157"),
+        "Brazoria":     ("48", "039"),
     }
-    try:
-        records = paginate_soda(url, params, limit=1000, max_pages=10)
-        for r in records:
-            r["_source_city"] = "Houston"
-        log.info(f"Houston permits: {len(records)} total")
-        return records
-    except Exception as e:
-        log.warning(f"Houston permits failed (non-critical): {e}")
-        return []
+
+    current_year = datetime.utcnow().year
+    years = [current_year - 1, current_year]
+    records = []
+
+    for county_name, (state_fips, county_fips) in TX_COUNTIES.items():
+        for year in years:
+            url = "https://api.census.gov/data/timeseries/bps/county"
+            params = {
+                "get":  "NAME,UNITS1,UNITS2,UNITS3_4,VAL1,VAL2,VAL3_4,DATE_DESC",
+                "for":  f"county:{county_fips}",
+                "in":   f"state:{state_fips}",
+                "time": str(year),
+            }
+            try:
+                resp = requests.get(url, params=params, timeout=20)
+                resp.raise_for_status()
+                rows = resp.json()
+                headers = rows[0]
+                for row in rows[1:]:
+                    r = dict(zip(headers, row))
+                    r["_county_name"] = county_name
+                    r["_source_city"] = county_name
+                    r["_source"]      = "census_bps"
+                    records.append(r)
+            except Exception as e:
+                log.warning(f"Census BPS {county_name} {year}: {e}")
+            time.sleep(0.05)
+
+    log.info(f"Census building permits: {len(records)} county-year records")
+    return records
+
+
+def fetch_houston_permits() -> list:
+    return []
 
 
 def fetch_dallas_permits() -> list:
-    """
-    Dallas construction permits via Socrata SODA.
-    Dataset: 9bi4-3rvk — Building Permits
-    """
-    log.info("Fetching Dallas construction permits...")
-
-    since = (datetime.utcnow() - timedelta(weeks=52)).strftime("%Y-%m-%dT00:00:00")
-    url = "https://www.dallasopendata.com/resource/9bi4-3rvk.json"
-    params = {
-        "$where": f"issueddate >= '{since}'",
-        "$select": (
-            "permit_num,permit_type,description,issueddate,"
-            "valuation,sqfeet,latitude,longitude,address,zipcode"
-        ),
-        "$order": "issueddate DESC",
-    }
-    try:
-        records = paginate_soda(url, params, limit=1000, max_pages=10)
-        for r in records:
-            r["_source_city"] = "Dallas"
-        log.info(f"Dallas permits: {len(records)} total")
-        return records
-    except Exception as e:
-        log.warning(f"Dallas permits failed (non-critical): {e}")
-        return []
+    return []
 
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
@@ -276,11 +286,14 @@ def main():
         save("sam_vendors", vendors)
     results["vendors"] = len(vendors)
 
-    # City permits
+    # City permits (Austin SODA) + county-level data (Census BPS)
     permits = []
     permits += fetch_austin_permits()
-    permits += fetch_houston_permits()
-    permits += fetch_dallas_permits()
+
+    census = fetch_census_building_permits()
+    save("census_bps", census)
+    results["census_records"] = len(census)
+
     save("tx_permits_combined", permits)
     results["permits"] = len(permits)
 
