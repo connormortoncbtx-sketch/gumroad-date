@@ -180,27 +180,24 @@ def fetch_austin_permits() -> list:
     """
     Austin construction permits via Socrata SODA.
     Dataset: 3syk-w9eu — Issued Construction Permits
-    Actual API field names confirmed from dataset CSV export.
+    No $select — return all columns and filter in clean.py to avoid field-name 400s.
     """
     log.info("Fetching Austin construction permits...")
-
-    # Socrata floating_timestamp requires quotes and no T suffix for $where
     since = (datetime.utcnow() - timedelta(weeks=52)).strftime("%Y-%m-%d")
     url = "https://data.austintexas.gov/resource/3syk-w9eu.json"
     params = {
-        "$where":  f"issued_date >= '{since}'",
-        "$select": (
-            "permit_num,permit_type_desc,description,issued_date,"
-            "total_job_valuation,total_new_add_sqft,latitude,longitude,"
-            "original_address_1,original_zip,council_district,permit_class_mapped"
-        ),
+        "$where": f"issued_date >= '{since}'",
         "$order": "issued_date DESC",
     }
-    records = paginate_soda(url, params, limit=1000, max_pages=10)
-    for r in records:
-        r["_source_city"] = "Austin"
-    log.info(f"Austin permits: {len(records)} total")
-    return records
+    try:
+        records = paginate_soda(url, params, limit=1000, max_pages=10)
+        for r in records:
+            r["_source_city"] = "Austin"
+        log.info(f"Austin permits: {len(records)} total")
+        return records
+    except Exception as e:
+        log.warning(f"Austin permits failed (non-critical): {e}")
+        return []
 
 
 def fetch_houston_permits() -> list:

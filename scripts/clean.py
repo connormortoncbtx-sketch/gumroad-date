@@ -112,18 +112,38 @@ def clean_contracts(raw: list) -> pd.DataFrame:
 # Unified column mapping: source_field -> standard_field per city
 PERMIT_MAPS = {
     "Austin": {
-        "permit_num":           "permit_id",
-        "permit_type_desc":     "permit_type",
-        "description":          "description",
-        "issued_date":          "issued_date",
-        "total_job_valuation":  "valuation_usd",
-        "total_new_add_sqft":   "sq_ft",
-        "latitude":             "lat",
-        "longitude":            "lon",
-        "original_address_1":   "address",
-        "original_zip":         "zip",
-        "council_district":     "district",
-        "permit_class_mapped":  "permit_class",
+        # permit id variants
+        "permit_num":               "permit_id",
+        "permitnum":                "permit_id",
+        "permit_number":            "permit_id",
+        # type variants
+        "permit_type_desc":         "permit_type",
+        "permit_type":              "permit_type",
+        # description variants
+        "description":              "description",
+        "work_desc":                "description",
+        # date variants
+        "issued_date":              "issued_date",
+        "issue_date":               "issued_date",
+        # valuation variants
+        "total_job_valuation":      "valuation_usd",
+        "total_valuation":          "valuation_usd",
+        "job_value":                "valuation_usd",
+        # sqft variants
+        "total_new_add_sqft":       "sq_ft",
+        "total_sq_ft":              "sq_ft",
+        "sq_ft":                    "sq_ft",
+        "total_existing_bldg_sqft": "sq_ft",
+        # location
+        "latitude":                 "lat",
+        "longitude":                "lon",
+        "original_address_1":       "address",
+        "address":                  "address",
+        "original_zip":             "zip",
+        "zip":                      "zip",
+        "council_district":         "district",
+        "permit_class_mapped":      "permit_class",
+        "permit_class":             "permit_class",
     },
     "Houston": {
         "permit_number":        "permit_id",
@@ -170,9 +190,13 @@ def clean_permits(raw: list) -> pd.DataFrame:
             continue
 
         df = pd.DataFrame(city_raw)
-        # Rename to standard columns
-        df = df.rename(columns={k: v for k, v in mapping.items() if k in df.columns})
-        # Keep only standard columns that exist
+        log.info(f"  {city} raw columns: {list(df.columns)}")
+
+        # Rename only columns that actually exist in this batch
+        rename = {k: v for k, v in mapping.items() if k in df.columns}
+        df = df.rename(columns=rename)
+
+        # Keep standard columns that exist plus source city
         std_cols = list(set(mapping.values()) | {"_source_city"})
         df = df[[c for c in std_cols if c in df.columns]]
         df["city"] = city
