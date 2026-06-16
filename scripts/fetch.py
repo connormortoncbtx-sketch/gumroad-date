@@ -50,17 +50,21 @@ def fetch_usaspending_download() -> list:
     resp = requests.post(
         "https://api.usaspending.gov/api/v2/bulk_download/awards/",
         json={
-            "award_types":    ["contracts"],
-            "agency":         "all",
-            "date_type":      "action_date",
-            "start_date":     str(start_date),
-            "end_date":       str(end_date),
-            "place_of_performance_locations": [{"country": "USA", "state": "TX"}],
+            "columns": [],
+            "file_format": "csv",
             "filters": {
+                "prime_and_sub_award_types": {
+                    "prime_awards": ["A", "B", "C", "D"],
+                    "sub_awards": [],
+                },
+                "time_period": [{
+                    "date_type":   "action_date",
+                    "start_date":  str(start_date),
+                    "end_date":    str(end_date),
+                }],
+                "place_of_performance_locations": [{"country": "USA", "state": "TX"}],
                 "naics_codes": {"require": CONSTRUCTION_NAICS},
             },
-            "columns":        [],
-            "file_format":    "csv",
         },
         timeout=60,
     )
