@@ -1,32 +1,33 @@
 /**
  * TX Construction Intelligence — Cloudflare Worker
  *
- * Handles two routes:
- *   POST /ping     — Gumroad webhook, stores subscriber emails in KV
- *   GET  /subs     — GitHub Actions calls this to get the email list
+ * POST /ping   — Gumroad webhook, stores subscriber emails in KV
+ * GET  /subs   — Returns subscriber list (protected by secret query param)
  *
- * KV namespace: TX_INTEL_SUBS
- * Secrets (set via wrangler or Cloudflare dashboard):
- *   WORKER_SECRET  — shared secret so only your pipeline can call /subs
+ * KV namespace binding: TX_INTEL_SUBS
+ * Environment variable:  WORKER_SECRET
  */
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    try {
+      const url = new URL(request.url);
 
-    if (request.method === "POST" && url.pathname === "/ping") {
-      return handleGumroadPing(request, env);
+      if (request.method === "POST" && url.pathname === "/ping") {
+        return await handleGumroadPing(request, env);
+      }
+
+      if (request.method === "GET" && url.pathname === "/subs") {
+        return await handleGetSubscribers(request, env, url);
+      }
+
+      return new Response("TX Construction Intel Worker — OK", { status: 200 });
+
+    } catch (err) {
+      return new Response(`Worker error: ${err.message}`, { status: 500 });
     }
-
-    if (request.method === "GET" && url.pathname === "/subs") {
-      return handleGetSubscribers(request, env);
-    }
-
-    return new Response("TX Construction Intel Worker", { status: 200 });
   },
 };
-
-// ── Gumroad Ping handler ───────────────────────────────────────────────────
 
 async function handleGumroadPing(request, env) {
   try {
@@ -41,66 +42,66 @@ async function handleGumroadPing(request, env) {
       for (const [k, v] of params) data[k] = v;
     }
 
-    const email      = data.email || data.purchaser_email || "";
-    const saleType   = data.sale_timestamp ? "sale" : (data.cancelled ? "cancel" : "unknown");
-    const refunded   = data.refunded === "true" || data.refunded === true;
-    const cancelled  = data.cancelled === "true" || data.cancelled === true;
+    const email     = data.email || data.purchaser_email || "";
+    const refunded  = data.refunded === "true" || data.refunded === true;
+    const cancelled = data.cancelled === "true" || data.cancelled === true;
 
     if (!email) {
-      return new Response("No email found in ping", { status: 400 });
+      return new Response("No email in ping", { status: 400 });
     }
 
-    // Determine the subscriber's tier from the Gumroad variant
     const variant = (data.variants || data.option || "").toLowerCase();
-    let tier = "tier2";
-    if (variant.includes("pro") || variant.includes("49")) tier = "tier3";
+    const tier    = (variant.includes("pro") || variant.includes("49")) ? "tier3" : "tier2";
 
     if (refunded || cancelled) {
-      // Remove subscriber
       await env.TX_INTEL_SUBS.delete(`sub:${email}`);
-      console.log(`Removed subscriber: ${email} (${saleType})`);
     } else {
-      // Add/update subscriber
-      const record = {
+      const record = JSON.stringify({
         email,
         tier,
         subscribed_at: new Date().toISOString(),
         sale_id: data.sale_id || data.order_number || "",
-      };
-      await env.TX_INTEL_SUBS.put(`sub:${email}`, JSON.stringify(record));
-      console.log(`Added subscriber: ${email} → ${tier}`);
+      });
+      await env.TX_INTEL_SUBS.put(`sub:${email}`, record);
     }
 
     return new Response("OK", { status: 200 });
+
   } catch (err) {
-    console.error("Ping error:", err);
-    return new Response("Error processing ping", { status: 500 });
+    return new Response(`Ping error: ${err.message}`, { status: 500 });
   }
 }
 
-// ── Get subscribers list ───────────────────────────────────────────────────
+async function handleGetSubscribers(request, env, url) {
+  // Auth: compare query param secret against env variable
+  const provided = url.searchParams.get("secret") || "";
+  const expected = env.WORKER_SECRET || "";
 
-async function handleGetSubscribers(request, env) {
-  // Verify shared secret
-  const secret = url.searchParams.get("secret");
-  if (!secret || secret !== env.WORKER_SECRET) {
+  // If no secret is configured yet, return a helpful message
+  if (!expected) {
+    return new Response("WORKER_SECRET not configured on this Worker", { status: 500 });
+  }
+
+  if (provided !== expected) {
     return new Response("Unauthorized", { status: 401 });
   }
 
   try {
-    const list = await env.TX_INTEL_SUBS.list({ prefix: "sub:" });
+    const list        = await env.TX_INTEL_SUBS.list({ prefix: "sub:" });
     const subscribers = [];
 
     for (const key of list.keys) {
       const val = await env.TX_INTEL_SUBS.get(key.name);
-      if (val) subscribers.push(JSON.parse(val));
+      if (val) {
+        try { subscribers.push(JSON.parse(val)); } catch (_) {}
+      }
     }
 
     return new Response(JSON.stringify({ success: true, subscribers }), {
       headers: { "Content-Type": "application/json" },
     });
+
   } catch (err) {
-    console.error("Get subs error:", err);
-    return new Response("Error fetching subscribers", { status: 500 });
+    return new Response(`KV error: ${err.message}`, { status: 500 });
   }
 }
