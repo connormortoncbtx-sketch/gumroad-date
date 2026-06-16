@@ -2,10 +2,11 @@ name: TX Construction Intel — Weekly Pipeline
 
 on:
   schedule:
-    # Every Sunday at 4:00 AM UTC (11 PM Saturday CT)
     - cron: "0 4 * * 0"
   workflow_dispatch:
-    # Allow manual trigger from GitHub UI for testing
+
+permissions:
+  contents: write
 
 jobs:
   run-pipeline:
@@ -47,6 +48,19 @@ jobs:
             reports/
           retention-days: 90
 
+      - name: Collect release files
+        id: files
+        run: |
+          FILES="data/clean/tx_contracts_${{ steps.date.outputs.DATE }}.csv"
+          FILES="$FILES data/clean/summary_${{ steps.date.outputs.DATE }}.json"
+          FILES="$FILES reports/TX_Construction_Intel_${{ steps.date.outputs.DATE }}.pdf"
+          # Only include permits file if it exists
+          PERMITS="data/clean/tx_permits_${{ steps.date.outputs.DATE }}.csv"
+          if [ -f "$PERMITS" ]; then
+            FILES="$FILES $PERMITS"
+          fi
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+
       - name: Create GitHub Release with data files
         uses: softprops/action-gh-release@v2
         with:
@@ -56,17 +70,12 @@ jobs:
             ## Weekly Data Release
 
             Auto-generated every Sunday. Includes:
-            - `tx_contracts_*.csv` — Federal construction contracts awarded in Texas (past 52 weeks)
-            - `tx_permits_*.csv` — Construction permits across Austin, Houston, Dallas
-            - `summary_*.json` — Aggregated stats and top projects
+            - `tx_contracts_*.csv` — Federal construction & equipment contracts awarded in Texas (past 52 weeks, $27B+ tracked)
+            - `summary_*.json` — Aggregated stats by county and NAICS sector
             - `TX_Construction_Intel_*.pdf` — Weekly PDF digest (Tier 3)
 
-            **Data sources:** USASpending.gov, City of Austin Open Data, City of Houston Open Data, City of Dallas Open Data
-          files: |
-            data/clean/tx_contracts_${{ steps.date.outputs.DATE }}.csv
-            data/clean/tx_permits_${{ steps.date.outputs.DATE }}.csv
-            data/clean/summary_${{ steps.date.outputs.DATE }}.json
-            reports/TX_Construction_Intel_${{ steps.date.outputs.DATE }}.pdf
+            **Data source:** USASpending.gov federal contract awards API
+          files: ${{ steps.files.outputs.files }}
           draft: false
           prerelease: false
         env:
@@ -74,6 +83,4 @@ jobs:
 
       - name: Notify on failure
         if: failure()
-        run: |
-          echo "Pipeline failed — check logs above"
-          # Optional: add curl to a webhook/Slack/email here later
+        run: echo "Pipeline failed — check logs above"
