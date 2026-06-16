@@ -1,0 +1,7 @@
+name = "tx-intel-subs"
+main = "worker/index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "TX_INTEL_SUBS"
+id = "61cd3d69b896443f98259b8b034c2429"
