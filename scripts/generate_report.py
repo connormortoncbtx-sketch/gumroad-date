@@ -1,10 +1,8 @@
 """
 generate_report.py — Texas Construction Intelligence
-Auto-generates a weekly PDF digest from clean data + summary JSON.
-Outputs to reports/TX_Construction_Intel_YYYYMMDD.pdf
+Generates a polished weekly PDF digest from clean data + summary JSON.
 
-Run after clean.py:
-  python scripts/generate_report.py
+Run: python scripts/generate_report.py
 """
 
 import json
@@ -13,14 +11,14 @@ from datetime import datetime
 from pathlib import Path
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    HRFlowable, PageBreak,
+    HRFlowable, PageBreak, Paragraph, SimpleDocTemplate,
+    Spacer, Table, TableStyle,
 )
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -32,342 +30,405 @@ REPORTS_DIR.mkdir(exist_ok=True)
 TODAY      = datetime.utcnow().strftime("%Y%m%d")
 TODAY_DISP = datetime.utcnow().strftime("%B %d, %Y")
 
-# ── brand colors ──────────────────────────────────────────────────────────────
-NAVY   = colors.HexColor("#0D2137")
-TEAL   = colors.HexColor("#1A7F6E")
-AMBER  = colors.HexColor("#D97706")
-LIGHT  = colors.HexColor("#F0F4F8")
-MID    = colors.HexColor("#CBD5E1")
-WHITE  = colors.white
-BLACK  = colors.HexColor("#1E293B")
-MUTED  = colors.HexColor("#64748B")
+NAVY  = colors.HexColor("#0D2137")
+TEAL  = colors.HexColor("#1A7F6E")
+AMBER = colors.HexColor("#D97706")
+LIGHT = colors.HexColor("#F0F4F8")
+MID   = colors.HexColor("#CBD5E1")
+MUTED = colors.HexColor("#64748B")
+WHITE = colors.white
+BLACK = colors.HexColor("#1E293B")
+GREEN = colors.HexColor("#15803D")
+RED   = colors.HexColor("#DC2626")
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-def latest_clean(prefix: str) -> Path | None:
+def latest(prefix):
     files = sorted(CLEAN_DIR.glob(f"{prefix}_*.json"), reverse=True)
-    return files[0] if files else None
+    return json.loads(files[0].read_text()) if files else {}
 
 
-def load_summary() -> dict:
-    path = latest_clean("summary")
-    if not path:
-        log.warning("No summary JSON found — using empty dict")
-        return {}
-    return json.loads(path.read_text())
-
-
-def fmt_usd(val) -> str:
-    if val is None:
-        return "—"
+def fmt_usd(val, short=False):
     try:
         v = float(val)
-        if v >= 1_000_000_000:
-            return f"${v/1_000_000_000:.1f}B"
-        if v >= 1_000_000:
-            return f"${v/1_000_000:.1f}M"
-        if v >= 1_000:
-            return f"${v/1_000:.0f}K"
+        if short:
+            if v >= 1_000_000_000: return f"${v/1_000_000_000:.1f}B"
+            if v >= 1_000_000:     return f"${v/1_000_000:.1f}M"
+            if v >= 1_000:         return f"${v/1_000:.0f}K"
         return f"${v:,.0f}"
-    except (TypeError, ValueError):
+    except Exception:
         return "—"
 
 
-def fmt_num(val) -> str:
-    if val is None:
-        return "—"
-    try:
-        return f"{int(float(val)):,}"
-    except (TypeError, ValueError):
-        return "—"
+def fmt_num(val):
+    try:    return f"{int(float(val)):,}"
+    except: return "—"
 
 
-# ── styles ────────────────────────────────────────────────────────────────────
+def styles():
+    s = {}
+    def ps(name, **kw):
+        s[name] = ParagraphStyle(name, **kw)
+    ps("cover_title",   fontName="Helvetica-Bold", fontSize=32, leading=38, textColor=WHITE)
+    ps("cover_sub",     fontName="Helvetica",      fontSize=13, leading=18, textColor=colors.HexColor("#B0C4D8"))
+    ps("cover_date",    fontName="Helvetica-Bold", fontSize=11, leading=14, textColor=TEAL)
+    ps("h1",            fontName="Helvetica-Bold", fontSize=14, leading=18, textColor=NAVY, spaceBefore=14, spaceAfter=4)
+    ps("h2",            fontName="Helvetica-Bold", fontSize=11, leading=14, textColor=NAVY, spaceBefore=8,  spaceAfter=3)
+    ps("body",          fontName="Helvetica",      fontSize=9,  leading=13, textColor=BLACK)
+    ps("muted",         fontName="Helvetica",      fontSize=8,  leading=11, textColor=MUTED)
+    ps("kicker",        fontName="Helvetica-Bold", fontSize=8,  leading=11, textColor=TEAL, spaceBefore=10)
+    ps("stat_num",      fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=NAVY, alignment=TA_CENTER)
+    ps("stat_label",    fontName="Helvetica",      fontSize=7,  leading=10, textColor=MUTED, alignment=TA_CENTER)
+    ps("table_header",  fontName="Helvetica-Bold", fontSize=8,  leading=10, textColor=WHITE)
+    ps("table_cell",    fontName="Helvetica",      fontSize=8,  leading=10, textColor=BLACK)
+    ps("insight",       fontName="Helvetica",      fontSize=9,  leading=13, textColor=BLACK,
+       leftIndent=8, borderPadding=6)
+    return s
 
-def build_styles():
-    base = getSampleStyleSheet()
-    styles = {}
-
-    styles["cover_title"] = ParagraphStyle(
-        "cover_title", fontName="Helvetica-Bold",
-        fontSize=28, leading=34, textColor=WHITE, alignment=TA_LEFT,
-    )
-    styles["cover_sub"] = ParagraphStyle(
-        "cover_sub", fontName="Helvetica",
-        fontSize=13, leading=18, textColor=colors.HexColor("#B0C4D8"),
-        alignment=TA_LEFT,
-    )
-    styles["section_header"] = ParagraphStyle(
-        "section_header", fontName="Helvetica-Bold",
-        fontSize=14, leading=18, textColor=NAVY, spaceBefore=18, spaceAfter=6,
-    )
-    styles["body"] = ParagraphStyle(
-        "body", fontName="Helvetica",
-        fontSize=10, leading=15, textColor=BLACK,
-    )
-    styles["muted"] = ParagraphStyle(
-        "muted", fontName="Helvetica",
-        fontSize=9, leading=13, textColor=MUTED,
-    )
-    styles["kicker"] = ParagraphStyle(
-        "kicker", fontName="Helvetica-Bold",
-        fontSize=9, leading=12, textColor=TEAL, spaceBefore=4,
-    )
-    styles["stat_num"] = ParagraphStyle(
-        "stat_num", fontName="Helvetica-Bold",
-        fontSize=22, leading=26, textColor=NAVY, alignment=TA_CENTER,
-    )
-    styles["stat_label"] = ParagraphStyle(
-        "stat_label", fontName="Helvetica",
-        fontSize=8, leading=11, textColor=MUTED, alignment=TA_CENTER,
-    )
-    styles["footer"] = ParagraphStyle(
-        "footer", fontName="Helvetica",
-        fontSize=8, leading=11, textColor=MUTED, alignment=TA_CENTER,
-    )
-    return styles
-
-
-# ── page template ─────────────────────────────────────────────────────────────
 
 def on_page(canvas, doc):
-    """Draw header stripe and footer on every page after the cover."""
+    w, h = letter
     if doc.page == 1:
-        # Cover page — full navy background
         canvas.setFillColor(NAVY)
-        canvas.rect(0, 0, letter[0], letter[1], fill=1, stroke=0)
+        canvas.rect(0, 0, w, h, fill=1, stroke=0)
         canvas.setFillColor(TEAL)
-        canvas.rect(0, letter[1] - 0.35 * inch, letter[0], 0.35 * inch, fill=1, stroke=0)
+        canvas.rect(0, h - 0.4*inch, w, 0.4*inch, fill=1, stroke=0)
         return
-
-    # Inner pages — thin top bar
+    # Header
     canvas.setFillColor(NAVY)
-    canvas.rect(0, letter[1] - 0.3 * inch, letter[0], 0.3 * inch, fill=1, stroke=0)
+    canvas.rect(0, h - 0.28*inch, w, 0.28*inch, fill=1, stroke=0)
     canvas.setFillColor(WHITE)
-    canvas.setFont("Helvetica-Bold", 8)
-    canvas.drawString(0.5 * inch, letter[1] - 0.19 * inch, "TX CONSTRUCTION INTELLIGENCE")
-    canvas.setFont("Helvetica", 8)
-    canvas.drawRightString(letter[0] - 0.5 * inch, letter[1] - 0.19 * inch, TODAY_DISP)
-
+    canvas.setFont("Helvetica-Bold", 7)
+    canvas.drawString(0.5*inch, h - 0.17*inch, "TX CONSTRUCTION INTELLIGENCE  ·  CONFIDENTIAL")
+    canvas.setFont("Helvetica", 7)
+    canvas.drawRightString(w - 0.5*inch, h - 0.17*inch, f"{TODAY_DISP}  ·  Page {doc.page}")
     # Footer
-    canvas.setFillColor(MUTED)
-    canvas.setFont("Helvetica", 7.5)
-    canvas.drawCentredString(
-        letter[0] / 2, 0.35 * inch,
-        f"TX Construction Intelligence  ·  Week of {TODAY_DISP}  ·  Page {doc.page}  ·  Data: USASpending.gov, US Census BPS, City of Austin Open Data"
-    )
     canvas.setStrokeColor(MID)
     canvas.setLineWidth(0.5)
-    canvas.line(0.5 * inch, 0.5 * inch, letter[0] - 0.5 * inch, 0.5 * inch)
+    canvas.line(0.5*inch, 0.45*inch, w - 0.5*inch, 0.45*inch)
+    canvas.setFillColor(MUTED)
+    canvas.setFont("Helvetica", 6.5)
+    canvas.drawCentredString(w/2, 0.3*inch,
+        "Data: USASpending.gov federal awards API  ·  TX Construction Intelligence Weekly Digest  ·  For subscriber use only")
 
 
-# ── content builders ──────────────────────────────────────────────────────────
-
-def build_cover(styles) -> list:
-    elems = []
-    elems.append(Spacer(1, 2.2 * inch))
-    elems.append(Paragraph("TX Construction", styles["cover_title"]))
-    elems.append(Paragraph("Intelligence", styles["cover_title"]))
-    elems.append(Spacer(1, 0.15 * inch))
-    elems.append(Paragraph(f"Weekly Market Digest  ·  {TODAY_DISP}", styles["cover_sub"]))
-    elems.append(Spacer(1, 0.1 * inch))
-    elems.append(Paragraph(
-        "Federal contracts · Construction permits · Vendor activity · Southeast Texas focus",
-        styles["cover_sub"]
-    ))
-    elems.append(Spacer(1, 2.5 * inch))
-    elems.append(Paragraph(
-        "Data sources: USASpending.gov · US Census Bureau BPS · City of Austin Open Data",
-        styles["muted"]
-    ))
-    elems.append(PageBreak())
-    return elems
+def tbl_style(header_color=NAVY, stripe=LIGHT):
+    return TableStyle([
+        ("BACKGROUND",   (0,0), (-1,0),  header_color),
+        ("TEXTCOLOR",    (0,0), (-1,0),  WHITE),
+        ("FONTNAME",     (0,0), (-1,0),  "Helvetica-Bold"),
+        ("FONTSIZE",     (0,0), (-1,-1), 8),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [WHITE, stripe]),
+        ("GRID",         (0,0), (-1,-1), 0.4, MID),
+        ("TOPPADDING",   (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 4),
+        ("LEFTPADDING",  (0,0), (-1,-1), 6),
+        ("RIGHTPADDING", (0,0), (-1,-1), 6),
+        ("VALIGN",       (0,0), (-1,-1), "MIDDLE"),
+    ])
 
 
-def build_stat_card(label: str, value: str, styles) -> list:
+def build_cover(S):
     return [
-        Paragraph(value, styles["stat_num"]),
-        Paragraph(label, styles["stat_label"]),
+        Spacer(1, 1.8*inch),
+        Paragraph("TX Construction", S["cover_title"]),
+        Paragraph("Intelligence", S["cover_title"]),
+        Spacer(1, 0.12*inch),
+        Paragraph(f"Weekly Market Digest", S["cover_sub"]),
+        Spacer(1, 0.06*inch),
+        Paragraph(f"Week of {TODAY_DISP}", S["cover_date"]),
+        Spacer(1, 0.35*inch),
+        Paragraph(
+            "Federal contract awards  ·  Vendor intelligence  ·  Sector analysis  ·  Geographic breakdown",
+            S["cover_sub"]
+        ),
+        Spacer(1, 2.8*inch),
+        Paragraph("USASpending.gov  ·  Weekly automated pipeline", S["muted"]),
+        PageBreak(),
     ]
 
 
-def build_summary_table(summary: dict, styles) -> list:
+def build_executive_summary(c, S):
     elems = []
-    c = summary.get("contracts", {})
-    p = summary.get("permits", {})
+    elems.append(Paragraph("Executive summary", S["h1"]))
+    elems.append(HRFlowable(width="100%", thickness=1.5, color=TEAL, spaceAfter=10))
 
-    elems.append(Paragraph("Weekly at a glance", styles["section_header"]))
-    elems.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=10))
+    total    = c.get("total_count", 0)
+    val      = c.get("total_value", 0)
+    avg      = c.get("avg_value", 0)
+    median   = c.get("median_value", 0)
+    top_rec  = c.get("top_recipient", "—")
+    top_val  = c.get("top_recipient_value", 0)
+    by_county= c.get("by_county", {})
+    top_county = list(by_county.keys())[0] if by_county else "—"
+    top_county_val = list(by_county.values())[0] if by_county else 0
 
-    stat_data = [[
-        Paragraph(fmt_num(c.get("total_count")), styles["stat_num"]),
-        Paragraph(fmt_usd(c.get("total_value")), styles["stat_num"]),
-        Paragraph(fmt_usd(c.get("avg_value")), styles["stat_num"]),
-        Paragraph(fmt_num(p.get("total_count")), styles["stat_num"]),
-    ], [
-        Paragraph("Federal contracts", styles["stat_label"]),
-        Paragraph("Total contract value", styles["stat_label"]),
-        Paragraph("Avg contract size", styles["stat_label"]),
-        Paragraph("Permits tracked", styles["stat_label"]),
-    ]]
-
-    t = Table(stat_data, colWidths=[1.6 * inch] * 4)
+    # Stat cards
+    stats = [
+        [Paragraph(fmt_usd(total, True), S["stat_num"]),
+         Paragraph(fmt_usd(val, True), S["stat_num"]),
+         Paragraph(fmt_usd(avg, True), S["stat_num"]),
+         Paragraph(fmt_usd(median, True), S["stat_num"])],
+        [Paragraph("Total contracts", S["stat_label"]),
+         Paragraph("Total obligation value", S["stat_label"]),
+         Paragraph("Average contract size", S["stat_label"]),
+         Paragraph("Median contract size", S["stat_label"])],
+    ]
+    t = Table(stats, colWidths=[1.55*inch]*4)
     t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), LIGHT),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [LIGHT, LIGHT]),
-        ("GRID", (0, 0), (-1, -1), 0.5, MID),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("LINEABOVE", (0, 0), (-1, 0), 2, TEAL),
+        ("BACKGROUND",   (0,0), (-1,-1), LIGHT),
+        ("LINEABOVE",    (0,0), (-1,0),  2.5, TEAL),
+        ("GRID",         (0,0), (-1,-1), 0.4, MID),
+        ("TOPPADDING",   (0,0), (-1,-1), 10),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 10),
     ]))
     elems.append(t)
-    elems.append(Spacer(1, 0.2 * inch))
+    elems.append(Spacer(1, 0.15*inch))
+
+    # Key insights narrative
+    elems.append(Paragraph("Key findings this week", S["h2"]))
+    insights = [
+        f"<b>{fmt_num(total)} federal construction and equipment contracts</b> were awarded in Texas over the past 52 weeks, representing <b>{fmt_usd(val, True)}</b> in total federal obligations.",
+        f"The largest single recipient was <b>{top_rec}</b>, capturing <b>{fmt_usd(top_val, True)}</b> in contract value — representing {round(top_val/val*100, 1) if val else 0}% of all tracked awards.",
+        f"<b>{top_county} County</b> leads all Texas counties by award volume at <b>{fmt_usd(top_county_val, True)}</b>, driven primarily by {list(c.get('by_agency', {}).keys())[0] if c.get('by_agency') else 'federal agencies'}.",
+        f"The average contract size of <b>{fmt_usd(avg, True)}</b> versus a median of <b>{fmt_usd(median, True)}</b> indicates a skewed distribution — a small number of large awards dominate total spend.",
+    ]
+    for insight in insights:
+        elems.append(Paragraph(f"• {insight}", S["body"]))
+        elems.append(Spacer(1, 4))
+
     return elems
 
 
-def build_top_contracts(summary: dict, styles) -> list:
+def build_county_breakdown(c, S):
     elems = []
-    elems.append(Paragraph("Top federal contracts — Texas", styles["section_header"]))
-    elems.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=8))
+    elems.append(Paragraph("Geographic breakdown — by county", S["h1"]))
+    elems.append(HRFlowable(width="100%", thickness=1.5, color=TEAL, spaceAfter=8))
 
-    by_county = summary.get("contracts", {}).get("by_county", {})
-    by_naics  = summary.get("contracts", {}).get("by_naics", {})
-
-    if by_county:
-        elems.append(Paragraph("Contract value by county (top 10)", styles["kicker"]))
-        rows = [["County", "Total value"]]
-        for county, val in list(by_county.items())[:10]:
-            rows.append([county or "Unknown", fmt_usd(val)])
-
-        t = Table(rows, colWidths=[4.0 * inch, 2.5 * inch])
-        t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-            ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
-            ("GRID", (0, 0), (-1, -1), 0.5, MID),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-        ]))
-        elems.append(t)
-        elems.append(Spacer(1, 0.15 * inch))
-
-    if by_naics:
-        elems.append(Paragraph("Contract value by construction type (NAICS)", styles["kicker"]))
-        rows = [["Sector", "Total value"]]
-        for naics, val in list(by_naics.items())[:8]:
-            label = str(naics)[:55] + ("…" if len(str(naics)) > 55 else "")
-            rows.append([label, fmt_usd(val)])
-
-        t = Table(rows, colWidths=[4.0 * inch, 2.5 * inch])
-        t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-            ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
-            ("GRID", (0, 0), (-1, -1), 0.5, MID),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-        ]))
-        elems.append(t)
-
-    elems.append(Spacer(1, 0.2 * inch))
-    return elems
-
-
-def build_top_permits(summary: dict, styles) -> list:
-    elems = []
-    p = summary.get("permits", {})
-    top = p.get("top_projects", [])
-
-    elems.append(Paragraph("Top construction permits", styles["section_header"]))
-    elems.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=8))
-
-    if not top:
-        elems.append(Paragraph("No permit data available this week.", styles["muted"]))
+    by_county = c.get("by_county", {})
+    if not by_county:
+        elems.append(Paragraph("No county data available this week.", S["muted"]))
         return elems
 
-    rows = [["Address", "City", "Type", "Valuation", "Sq Ft", "Date"]]
-    for proj in top[:15]:
-        addr = str(proj.get("address", "") or "")[:30]
+    total_val = c.get("total_value", 1)
+    rows = [["County", "Total obligations", "% of TX total", "Est. contracts"]]
+    county_items = list(by_county.items())[:20]
+    county_total = sum(v for _, v in county_items)
+
+    for county, val in county_items:
+        pct   = round(val / total_val * 100, 1) if total_val else 0
+        # Estimate contract count proportionally
+        est_n = round(c.get("total_count", 0) * val / total_val) if total_val else "—"
         rows.append([
-            addr,
-            proj.get("city", ""),
-            str(proj.get("permit_type", "") or "")[:22],
-            fmt_usd(proj.get("valuation_usd")),
-            fmt_num(proj.get("sq_ft")),
-            str(proj.get("issued_date", "") or "")[:10],
+            county or "Unknown",
+            fmt_usd(val),
+            f"{pct}%",
+            fmt_num(est_n),
         ])
 
-    t = Table(rows, colWidths=[1.8*inch, 0.75*inch, 1.6*inch, 0.85*inch, 0.65*inch, 0.8*inch])
-    t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-        ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
-        ("GRID", (0, 0), (-1, -1), 0.5, MID),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("ALIGN", (3, 0), (4, -1), "RIGHT"),
-    ]))
+    t = Table(rows, colWidths=[2.3*inch, 1.7*inch, 1.2*inch, 1.2*inch])
+    ts = tbl_style()
+    ts.add("ALIGN", (1, 0), (-1, -1), "RIGHT")
+    t.setStyle(ts)
     elems.append(t)
-    elems.append(Spacer(1, 0.2 * inch))
+    elems.append(Spacer(1, 0.1*inch))
+
+    # City breakdown
+    by_city = c.get("by_city", {})
+    if by_city:
+        elems.append(Paragraph("Top cities by obligation volume", S["kicker"]))
+        city_rows = [["City", "Total obligations"]]
+        for city, val in list(by_city.items())[:12]:
+            if city.strip():
+                city_rows.append([city, fmt_usd(val)])
+        t2 = Table(city_rows, colWidths=[3.5*inch, 2.9*inch])
+        ts2 = tbl_style(header_color=colors.HexColor("#1A4060"))
+        ts2.add("ALIGN", (1, 0), (1, -1), "RIGHT")
+        t2.setStyle(ts2)
+        elems.append(t2)
+
     return elems
 
 
-def build_disclaimer(styles) -> list:
+def build_sector_analysis(c, S):
+    elems = []
+    elems.append(Paragraph("Sector analysis — NAICS breakdown", S["h1"]))
+    elems.append(HRFlowable(width="100%", thickness=1.5, color=TEAL, spaceAfter=8))
+
+    by_naics = c.get("by_naics", {})
+    if not by_naics:
+        elems.append(Paragraph("No sector data available.", S["muted"]))
+        return elems
+
+    total_val = c.get("total_value", 1)
+    rows = [["NAICS sector", "Total obligations", "Share"]]
+    for naics, val in list(by_naics.items())[:15]:
+        if naics.strip():
+            pct = round(val / total_val * 100, 1) if total_val else 0
+            label = str(naics)[:58] + ("…" if len(str(naics)) > 58 else "")
+            rows.append([label, fmt_usd(val), f"{pct}%"])
+
+    t = Table(rows, colWidths=[3.8*inch, 1.7*inch, 0.9*inch])
+    ts = tbl_style()
+    ts.add("ALIGN", (1, 0), (-1, -1), "RIGHT")
+    t.setStyle(ts)
+    elems.append(t)
+    elems.append(Spacer(1, 0.12*inch))
+
+    # PSC breakdown
+    by_psc = c.get("by_psc", {})
+    if by_psc:
+        elems.append(Paragraph("Product/Service code (PSC) breakdown", S["kicker"]))
+        psc_rows = [["PSC description", "Obligations"]]
+        for psc, val in list(by_psc.items())[:10]:
+            if psc.strip():
+                label = str(psc)[:58] + ("…" if len(str(psc)) > 58 else "")
+                psc_rows.append([label, fmt_usd(val)])
+        t2 = Table(psc_rows, colWidths=[4.5*inch, 1.9*inch])
+        ts2 = tbl_style(header_color=colors.HexColor("#1A4060"))
+        ts2.add("ALIGN", (1, 0), (1, -1), "RIGHT")
+        t2.setStyle(ts2)
+        elems.append(t2)
+
+    return elems
+
+
+def build_top_recipients(c, S):
+    elems = []
+    elems.append(Paragraph("Top vendors by obligation value", S["h1"]))
+    elems.append(HRFlowable(width="100%", thickness=1.5, color=TEAL, spaceAfter=8))
+
+    by_rec = c.get("by_recipient", {})
+    if not by_rec:
+        elems.append(Paragraph("No recipient data available.", S["muted"]))
+        return elems
+
+    total_val = c.get("total_value", 1)
+    rows = [["#", "Vendor name", "Total obligations", "% share"]]
+    for i, (name, val) in enumerate(list(by_rec.items())[:15], 1):
+        if name.strip():
+            pct = round(val / total_val * 100, 1) if total_val else 0
+            rows.append([str(i), name[:42], fmt_usd(val), f"{pct}%"])
+
+    t = Table(rows, colWidths=[0.3*inch, 3.5*inch, 1.6*inch, 0.9*inch])
+    ts = tbl_style()
+    ts.add("ALIGN", (0, 0), (0, -1), "CENTER")
+    ts.add("ALIGN", (2, 0), (-1, -1), "RIGHT")
+    t.setStyle(ts)
+    elems.append(t)
+    return elems
+
+
+def build_agency_breakdown(c, S):
+    elems = []
+    elems.append(Paragraph("Awarding agency breakdown", S["h1"]))
+    elems.append(HRFlowable(width="100%", thickness=1.5, color=TEAL, spaceAfter=8))
+
+    by_agency = c.get("by_agency", {})
+    if not by_agency:
+        elems.append(Paragraph("No agency data available.", S["muted"]))
+        return elems
+
+    total_val = c.get("total_value", 1)
+    rows = [["Agency", "Total obligations", "Share"]]
+    for agency, val in list(by_agency.items())[:12]:
+        if agency.strip():
+            pct = round(val / total_val * 100, 1) if total_val else 0
+            rows.append([agency[:50], fmt_usd(val), f"{pct}%"])
+
+    t = Table(rows, colWidths=[3.8*inch, 1.7*inch, 0.9*inch])
+    ts = tbl_style()
+    ts.add("ALIGN", (1, 0), (-1, -1), "RIGHT")
+    t.setStyle(ts)
+    elems.append(t)
+    return elems
+
+
+def build_top_contracts(c, S):
+    elems = []
+    elems.append(Paragraph("Notable contracts this week", S["h1"]))
+    elems.append(HRFlowable(width="100%", thickness=1.5, color=TEAL, spaceAfter=8))
+    elems.append(Paragraph(
+        "The 25 highest-value contracts awarded in Texas during the reporting period.",
+        S["body"]
+    ))
+    elems.append(Spacer(1, 6))
+
+    top = c.get("top_contracts", [])
+    if not top:
+        elems.append(Paragraph("No contract detail available.", S["muted"]))
+        return elems
+
+    rows = [["Recipient", "Value", "City / County", "Agency", "Description", "Date"]]
+    for contract in top:
+        loc = ", ".join(filter(None, [
+            str(contract.get("perf_city", "") or "").strip(),
+            str(contract.get("perf_county", "") or "").strip(),
+        ])) or "TX"
+        desc = str(contract.get("description", "") or "")[:35]
+        rows.append([
+            str(contract.get("recipient", "") or "")[:22],
+            fmt_usd(contract.get("obligation_usd"), short=True),
+            loc[:20],
+            str(contract.get("agency", "") or "")[:18],
+            desc,
+            str(contract.get("action_date", "") or "")[:10],
+        ])
+
+    t = Table(rows, colWidths=[1.5*inch, 0.7*inch, 1.3*inch, 1.2*inch, 1.5*inch, 0.65*inch])
+    ts = tbl_style()
+    ts.add("ALIGN", (1, 0), (1, -1), "RIGHT")
+    ts.add("FONTSIZE", (0, 0), (-1, -1), 7)
+    t.setStyle(ts)
+    elems.append(t)
+    return elems
+
+
+def build_disclaimer(S):
     return [
-        HRFlowable(width="100%", thickness=0.5, color=MID, spaceBefore=20, spaceAfter=8),
+        Spacer(1, 0.3*inch),
+        HRFlowable(width="100%", thickness=0.5, color=MID, spaceAfter=6),
         Paragraph(
-            "Data sourced from USASpending.gov, US Census Bureau Building Permits Survey, and City of Austin Open Data. "
-            "All figures reflect publicly available government data as of the report date. "
-            "This report is provided for informational purposes only. Not investment or legal advice.",
-            styles["muted"]
+            "This report is generated automatically from publicly available data sourced from USASpending.gov, "
+            "the official U.S. government portal for federal spending data maintained by the Department of the Treasury. "
+            "All figures reflect obligations as reported by federal agencies and are subject to revision. "
+            "For subscriber use only. Not for redistribution.",
+            S["muted"]
         ),
     ]
 
 
-# ── main ──────────────────────────────────────────────────────────────────────
-
 def main():
     log.info("=== TX Construction Intel — generate_report.py ===")
-    summary = load_summary()
-    styles  = build_styles()
 
-    out_path = REPORTS_DIR / f"TX_Construction_Intel_{TODAY}.pdf"
+    summary = latest("summary")
+    c       = summary.get("contracts", {})
+    S       = styles()
+
+    out = REPORTS_DIR / f"TX_Construction_Intel_{TODAY}.pdf"
     doc = SimpleDocTemplate(
-        str(out_path),
-        pagesize=letter,
-        leftMargin=0.6 * inch,
-        rightMargin=0.6 * inch,
-        topMargin=0.65 * inch,
-        bottomMargin=0.65 * inch,
+        str(out), pagesize=letter,
+        leftMargin=0.55*inch, rightMargin=0.55*inch,
+        topMargin=0.6*inch,   bottomMargin=0.6*inch,
     )
 
     elems = []
-    elems += build_cover(styles)
-    elems += build_summary_table(summary, styles)
-    elems += build_top_contracts(summary, styles)
-    elems += build_top_permits(summary, styles)
-    elems += build_disclaimer(styles)
+    elems += build_cover(S)
+    elems += build_executive_summary(c, S)
+    elems.append(PageBreak())
+    elems += build_county_breakdown(c, S)
+    elems.append(PageBreak())
+    elems += build_sector_analysis(c, S)
+    elems.append(PageBreak())
+    elems += build_top_recipients(c, S)
+    elems += [Spacer(1, 0.2*inch)]
+    elems += build_agency_breakdown(c, S)
+    elems.append(PageBreak())
+    elems += build_top_contracts(c, S)
+    elems += build_disclaimer(S)
 
     doc.build(elems, onFirstPage=on_page, onLaterPages=on_page)
-    log.info(f"Report saved → {out_path}")
-    return out_path
+    log.info(f"Report saved → {out}")
+    return out
 
 
 if __name__ == "__main__":

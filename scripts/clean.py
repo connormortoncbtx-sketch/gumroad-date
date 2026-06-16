@@ -1,19 +1,20 @@
 """
 clean.py — Texas Construction Intelligence
-Normalizes raw fetched data into clean, typed, consistent schemas.
-Outputs clean CSVs + JSON to data/clean/.
+Normalizes USASpending bulk download CSV into a clean, enriched dataset.
 
-Run after fetch.py:
-  python scripts/clean.py
+Download CSV field names differ from the API — they use human-readable
+column headers like "Award Amount" and "Place of Performance City Name".
+
+Run: python scripts/clean.py
 """
 
 import json
-import re
 import logging
-import pandas as pd
-from datetime import datetime, date
+import re
+from datetime import datetime
 from pathlib import Path
-from glob import glob
+
+import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -24,25 +25,76 @@ CLEAN_DIR.mkdir(parents=True, exist_ok=True)
 
 TODAY = datetime.utcnow().strftime("%Y%m%d")
 
+# Map download CSV headers → our standard column names
+# USASpending download uses verbose human-readable column names
+FIELD_MAP = {
+    # Award identity
+    "contract_award_unique_key":             "award_id",
+    "award_id_piid":                         "piid",
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+    # Recipient
+    "recipient_name":                        "recipient",
+    "recipient_doing_business_as_name":      "recipient_dba",
+    "recipient_uei":                         "recipient_uei",
+    "recipient_parent_name":                 "recipient_parent",
 
-def latest_raw(prefix: str) -> Path | None:
-    files = sorted(RAW_DIR.glob(f"{prefix}_*.json"), reverse=True)
-    return files[0] if files else None
+    # Recipient location
+    "recipient_city_name":                   "recipient_city",
+    "recipient_county_name":                 "recipient_county",
+    "recipient_state_code":                  "recipient_state",
+    "recipient_zip_4_code":                  "recipient_zip",
 
+    # Place of performance
+    "primary_place_of_performance_city_name":       "perf_city",
+    "primary_place_of_performance_county_name":     "perf_county",
+    "primary_place_of_performance_state_code":      "perf_state",
+    "primary_place_of_performance_zip_4":           "perf_zip",
+    "primary_place_of_performance_congressional_di":"perf_congressional_district",
 
-def load_raw(prefix: str) -> list:
-    path = latest_raw(prefix)
-    if not path:
-        log.warning(f"No raw file found for prefix '{prefix}'")
-        return []
-    log.info(f"Loading {path}")
-    return json.loads(path.read_text())
+    # Amounts
+    "federal_action_obligation":             "obligation_usd",
+    "current_total_value_of_award":          "total_value_usd",
+    "potential_total_value_of_award":        "potential_value_usd",
+
+    # Dates
+    "action_date":                           "action_date",
+    "period_of_performance_start_date":      "start_date",
+    "period_of_performance_current_end_date":"end_date",
+
+    # Agency
+    "awarding_agency_name":                  "agency",
+    "awarding_sub_agency_name":              "sub_agency",
+    "awarding_office_name":                  "office",
+    "funding_agency_name":                   "funding_agency",
+
+    # Classification
+    "naics_code":                            "naics_code",
+    "naics_description":                     "naics_desc",
+    "product_or_service_code":               "psc_code",
+    "product_or_service_code_description":   "psc_desc",
+    "type_of_contract_pricing":              "pricing_type",
+    "award_type":                            "award_type",
+    "contract_award_type":                   "contract_type",
+
+    # Competition
+    "extent_competed":                       "competition",
+    "number_of_offers_received":             "offers_received",
+    "small_business_competitiveness_demonst":"small_biz_competitive",
+
+    # Business type
+    "contracting_officers_determination_of_b":"business_size",
+    "small_disadvantaged_business":          "sdb",
+    "women_owned_small_business":            "wosb",
+    "veteran_owned_business":                "vob",
+    "service_disabled_veteran_owned_small_b": "sdvosb",
+
+    # Description
+    "award_description":                     "description",
+}
 
 
 def to_float(val) -> float | None:
-    if val is None:
+    if val is None or str(val).strip() in ("", "nan", "None"):
         return None
     try:
         return float(str(val).replace(",", "").replace("$", "").strip())
@@ -51,268 +103,157 @@ def to_float(val) -> float | None:
 
 
 def to_date(val) -> str | None:
-    if not val:
+    if not val or str(val).strip() in ("", "nan", "None"):
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
         try:
-            return datetime.strptime(str(val)[:19], fmt).strftime("%Y-%m-%d")
+            return datetime.strptime(str(val).strip()[:10], fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
-    return str(val)[:10]
+    return str(val).strip()[:10]
 
 
-def slugify(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(text).lower()).strip("_")
+def clean_text(val) -> str:
+    if not val or str(val).strip() in ("", "nan", "None"):
+        return ""
+    return str(val).strip().title()
 
 
-# ── clean contracts ───────────────────────────────────────────────────────────
+def load_raw(prefix: str) -> list:
+    files = sorted(RAW_DIR.glob(f"{prefix}_*.json"), reverse=True)
+    if not files:
+        log.warning(f"No raw file found for {prefix}")
+        return []
+    log.info(f"Loading {files[0]}")
+    return json.loads(files[0].read_text())
+
 
 def clean_contracts(raw: list) -> pd.DataFrame:
-    log.info(f"Cleaning {len(raw)} contract records...")
-    rows = []
-    for r in raw:
-        rows.append({
-            "award_id":         r.get("Award ID"),
-            "recipient":        r.get("Recipient Name"),
-            "amount_usd":       to_float(r.get("Award Amount")),
-            "description":      r.get("Description"),
-            "start_date":       to_date(r.get("Start Date")),
-            "end_date":         to_date(r.get("End Date")),
-            "agency":           r.get("Awarding Agency"),
-            "sub_agency":       r.get("Awarding Sub Agency"),
-            "award_type":       r.get("Contract Award Type"),
-            "state":            r.get("Place of Performance State Code"),
-            "county":           r.get("Place of Performance County Name"),
-            "city":             r.get("Place of Performance City Name"),
-            "naics_code":       r.get("naics_code"),
-            "naics_desc":       r.get("naics_description"),
-        })
+    log.info(f"Cleaning {len(raw):,} raw contract records...")
 
-    df = pd.DataFrame(rows)
-
-    # Drop nulls on key fields
-    df = df.dropna(subset=["award_id", "amount_usd"])
-
-    # Normalize text
-    for col in ["recipient", "description", "agency", "county", "city"]:
-        df[col] = df[col].astype(str).str.strip().str.title()
-
-    # Filter out tiny awards (noise below $10k)
-    df = df[df["amount_usd"] >= 10_000]
-
-    # Sort
-    df = df.sort_values("amount_usd", ascending=False).reset_index(drop=True)
-
-    log.info(f"Contracts after cleaning: {len(df)} rows, ${df['amount_usd'].sum():,.0f} total value")
-    return df
-
-
-# ── clean permits ─────────────────────────────────────────────────────────────
-
-# Unified column mapping: source_field -> standard_field per city
-PERMIT_MAPS = {
-    "Austin": {
-        # permit id variants
-        "permit_num":               "permit_id",
-        "permitnum":                "permit_id",
-        "permit_number":            "permit_id",
-        # type variants
-        "permit_type_desc":         "permit_type",
-        "permit_type":              "permit_type",
-        # description variants
-        "description":              "description",
-        "work_desc":                "description",
-        # date variants
-        "issued_date":              "issued_date",
-        "issue_date":               "issued_date",
-        # valuation variants
-        "total_job_valuation":      "valuation_usd",
-        "total_valuation":          "valuation_usd",
-        "job_value":                "valuation_usd",
-        # sqft variants
-        "total_new_add_sqft":       "sq_ft",
-        "total_sq_ft":              "sq_ft",
-        "sq_ft":                    "sq_ft",
-        "total_existing_bldg_sqft": "sq_ft",
-        # location
-        "latitude":                 "lat",
-        "longitude":                "lon",
-        "original_address_1":       "address",
-        "address":                  "address",
-        "original_zip":             "zip",
-        "zip":                      "zip",
-        "council_district":         "district",
-        "permit_class_mapped":      "permit_class",
-        "permit_class":             "permit_class",
-    },
-    "Houston": {
-        "permit_number":        "permit_id",
-        "permit_type":          "permit_type",
-        "work_description":     "description",
-        "date_issued":          "issued_date",
-        "declared_valuation":   "valuation_usd",
-        "proj_area":            "sq_ft",
-        "latitude":             "lat",
-        "longitude":            "lon",
-        "address":              "address",
-        "zip_code":             "zip",
-        "council_district":     "district",
-    },
-    "Dallas": {
-        "permit_num":           "permit_id",
-        "permit_type":          "permit_type",
-        "description":          "description",
-        "issueddate":           "issued_date",
-        "valuation":            "valuation_usd",
-        "sqfeet":               "sq_ft",
-        "latitude":             "lat",
-        "longitude":            "lon",
-        "address":              "address",
-        "zipcode":              "zip",
-    },
-}
-
-# Permit types to keep (construction-relevant only)
-KEEP_KEYWORDS = [
-    "commercial", "industrial", "new construct", "addition",
-    "demolition", "mechanical", "electrical", "foundation",
-    "grading", "site work", "paving", "bridge", "structure",
-    "warehouse", "manufacturing", "office", "retail",
-]
-
-def clean_permits(raw: list) -> pd.DataFrame:
-    log.info(f"Cleaning {len(raw)} permit records...")
-    frames = []
-
-    for city, mapping in PERMIT_MAPS.items():
-        city_raw = [r for r in raw if r.get("_source_city") == city]
-        if not city_raw:
-            continue
-
-        df = pd.DataFrame(city_raw)
-        log.info(f"  {city} raw columns: {list(df.columns)}")
-
-        # Rename only columns that actually exist in this batch
-        rename = {k: v for k, v in mapping.items() if k in df.columns}
-        df = df.rename(columns=rename)
-
-        # Keep standard columns that exist plus source city
-        std_cols = list(set(mapping.values()) | {"_source_city"})
-        df = df[[c for c in std_cols if c in df.columns]]
-        df["city"] = city
-        frames.append(df)
-
-    if not frames:
+    if not raw:
         return pd.DataFrame()
 
-    df = pd.concat(frames, ignore_index=True)
+    df = pd.DataFrame(raw)
+
+    # Normalize column names: lowercase + underscores
+    df.columns = [c.lower().strip().replace(" ", "_").replace("-", "_")
+                  .replace("(", "").replace(")", "").replace("/", "_")
+                  .replace(".", "").replace(",", "") for c in df.columns]
+
+    log.info(f"Raw columns sample: {list(df.columns)[:10]}")
+
+    # Apply field mapping
+    rename = {k: v for k, v in FIELD_MAP.items() if k in df.columns}
+    df = df.rename(columns=rename)
+    log.info(f"Mapped {len(rename)} columns")
+
+    # Keep only our standard columns that exist
+    keep = list(set(FIELD_MAP.values()))
+    df   = df[[c for c in keep if c in df.columns]].copy()
 
     # Type conversions
-    df["valuation_usd"] = df.get("valuation_usd", pd.Series()).apply(to_float)
-    df["sq_ft"]         = df.get("sq_ft", pd.Series()).apply(to_float)
-    df["lat"]           = pd.to_numeric(df.get("lat", pd.Series()), errors="coerce")
-    df["lon"]           = pd.to_numeric(df.get("lon", pd.Series()), errors="coerce")
-    df["issued_date"]   = df.get("issued_date", pd.Series()).apply(to_date)
+    for col in ["obligation_usd", "total_value_usd", "potential_value_usd"]:
+        if col in df.columns:
+            df[col] = df[col].apply(to_float)
 
-    # Filter: keep only construction-relevant permit types
-    if "permit_type" in df.columns and "description" in df.columns:
-        kw_pattern = "|".join(KEEP_KEYWORDS)
-        mask = (
-            df["permit_type"].str.lower().str.contains(kw_pattern, na=False) |
-            df["description"].str.lower().str.contains(kw_pattern, na=False)
-        )
-        df = df[mask]
+    for col in ["action_date", "start_date", "end_date"]:
+        if col in df.columns:
+            df[col] = df[col].apply(to_date)
 
-    # Filter: remove sub-$5k valuations (noise)
-    df = df[df["valuation_usd"].fillna(0) >= 5_000]
+    for col in ["recipient", "recipient_dba", "recipient_parent",
+                "recipient_city", "recipient_county",
+                "perf_city", "perf_county", "agency", "sub_agency",
+                "office", "description"]:
+        if col in df.columns:
+            df[col] = df[col].apply(clean_text)
 
-    # Sort by valuation
-    df = df.sort_values("valuation_usd", ascending=False).reset_index(drop=True)
+    # Filter: keep only positive obligations >= $10k
+    if "obligation_usd" in df.columns:
+        before = len(df)
+        df = df[df["obligation_usd"].fillna(0) >= 10_000]
+        log.info(f"Filtered {before - len(df)} records below $10k threshold")
 
-    log.info(f"Permits after cleaning: {len(df)} rows, ${df['valuation_usd'].sum():,.0f} total valuation")
+    # Sort by obligation
+    if "obligation_usd" in df.columns:
+        df = df.sort_values("obligation_usd", ascending=False)
+
+    df = df.reset_index(drop=True)
+    log.info(f"Contracts after cleaning: {len(df):,} rows")
+    if "obligation_usd" in df.columns:
+        log.info(f"Total obligation value: ${df['obligation_usd'].sum():,.0f}")
+
     return df
 
 
-# ── summary stats (used by report generator) ─────────────────────────────────
+def compute_summary(df: pd.DataFrame) -> dict:
+    if df.empty:
+        return {"generated_at": datetime.utcnow().isoformat(), "contracts": {}}
 
-def compute_summary(contracts_df: pd.DataFrame, permits_df: pd.DataFrame) -> dict:
-    summary = {
+    c = {}
+    val_col = "obligation_usd" if "obligation_usd" in df.columns else None
+
+    c["total_count"] = int(len(df))
+
+    if val_col:
+        c["total_value"]  = float(df[val_col].sum())
+        c["avg_value"]    = float(df[val_col].mean())
+        c["median_value"] = float(df[val_col].median())
+
+    if "recipient" in df.columns and val_col:
+        top_r = df.groupby("recipient")[val_col].sum().sort_values(ascending=False).head(15)
+        c["by_recipient"] = top_r.to_dict()
+        c["top_recipient"] = top_r.index[0] if len(top_r) else ""
+        c["top_recipient_value"] = float(top_r.iloc[0]) if len(top_r) else 0
+
+    for col, key in [("perf_county", "by_county"), ("perf_city", "by_city"),
+                     ("naics_desc", "by_naics"), ("agency", "by_agency"),
+                     ("psc_desc", "by_psc")]:
+        if col in df.columns and val_col:
+            grp = df.groupby(col)[val_col].sum().sort_values(ascending=False).head(15)
+            # Drop blank keys
+            grp = grp[grp.index.str.strip() != ""]
+            c[key] = grp.to_dict()
+
+    if "perf_county" in df.columns and val_col:
+        c["top_county"] = list(c.get("by_county", {}).keys())[:1]
+
+    # Top 25 contracts for the PDF
+    display_cols = [col for col in [
+        "award_id", "recipient", "obligation_usd", "description",
+        "perf_city", "perf_county", "perf_state", "perf_zip",
+        "agency", "sub_agency", "naics_code", "naics_desc",
+        "psc_code", "action_date", "start_date", "end_date",
+        "contract_type", "competition", "offers_received",
+    ] if col in df.columns]
+
+    c["top_contracts"] = df[display_cols].head(25).to_dict(orient="records")
+
+    return {
         "generated_at": datetime.utcnow().isoformat(),
-        "contracts": {},
-        "permits": {},
+        "contracts":    c,
+        "permits":      {},
     }
 
-    if not contracts_df.empty:
-        summary["contracts"] = {
-            "total_count":   int(len(contracts_df)),
-            "total_value":   float(contracts_df["amount_usd"].sum()),
-            "avg_value":     float(contracts_df["amount_usd"].mean()),
-            "top_recipient": contracts_df.iloc[0]["recipient"] if len(contracts_df) else None,
-            "top_amount":    float(contracts_df.iloc[0]["amount_usd"]) if len(contracts_df) else 0,
-            "by_naics": (
-                contracts_df.groupby("naics_desc")["amount_usd"]
-                .sum().sort_values(ascending=False).head(10).to_dict()
-            ),
-            "by_county": (
-                contracts_df.groupby("county")["amount_usd"]
-                .sum().sort_values(ascending=False).head(10).to_dict()
-            ),
-        }
-
-    if not permits_df.empty:
-        summary["permits"] = {
-            "total_count":     int(len(permits_df)),
-            "total_valuation": float(permits_df["valuation_usd"].sum()),
-            "avg_valuation":   float(permits_df["valuation_usd"].mean()),
-            "by_city": (
-                permits_df.groupby("city")["valuation_usd"]
-                .sum().sort_values(ascending=False).to_dict()
-            ),
-            "by_type": (
-                permits_df.groupby("permit_type")["valuation_usd"]
-                .sum().sort_values(ascending=False).head(10).to_dict()
-            ),
-            "top_projects": permits_df.head(20)[[
-                "permit_id", "city", "address", "permit_type",
-                "valuation_usd", "sq_ft", "issued_date"
-            ]].to_dict(orient="records"),
-        }
-
-    return summary
-
-
-# ── entrypoint ────────────────────────────────────────────────────────────────
 
 def main():
     log.info("=== TX Construction Intel — clean.py ===")
 
-    # Load raw
-    contracts_raw = load_raw("usaspending_contracts")
-    permits_raw   = load_raw("tx_permits_combined")
+    raw       = load_raw("usaspending_contracts")
+    contracts = clean_contracts(raw)
 
-    # Clean
-    contracts_df = clean_contracts(contracts_raw) if contracts_raw else pd.DataFrame()
-    permits_df   = clean_permits(permits_raw)     if permits_raw   else pd.DataFrame()
-
-    # Save clean CSVs (these are the product files)
-    if not contracts_df.empty:
+    if not contracts.empty:
         path = CLEAN_DIR / f"tx_contracts_{TODAY}.csv"
-        contracts_df.to_csv(path, index=False)
+        contracts.to_csv(path, index=False)
         log.info(f"Saved → {path}")
 
-    if not permits_df.empty:
-        path = CLEAN_DIR / f"tx_permits_{TODAY}.csv"
-        permits_df.to_csv(path, index=False)
-        log.info(f"Saved → {path}")
-
-    # Save summary JSON (used by report generator)
-    summary = compute_summary(contracts_df, permits_df)
-    path = CLEAN_DIR / f"summary_{TODAY}.json"
+    summary = compute_summary(contracts)
+    path    = CLEAN_DIR / f"summary_{TODAY}.json"
     path.write_text(json.dumps(summary, indent=2, default=str))
     log.info(f"Saved → {path}")
 
     log.info("=== clean.py done ===")
-    return contracts_df, permits_df, summary
+    return contracts, summary
 
 
 if __name__ == "__main__":
