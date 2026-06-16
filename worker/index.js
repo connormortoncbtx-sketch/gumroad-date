@@ -82,7 +82,7 @@ async function handleGumroadPing(request, env) {
 
 async function handleGetSubscribers(request, env) {
   // Verify shared secret
-  const secret = request.headers.get("x-worker-secret");
+  const secret = url.searchParams.get("secret");
   if (!secret || secret !== env.WORKER_SECRET) {
     return new Response("Unauthorized", { status: 401 });
   }
