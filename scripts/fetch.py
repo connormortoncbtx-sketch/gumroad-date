@@ -44,7 +44,7 @@ def fetch_usaspending_download() -> list:
     log.info("Requesting USASpending bulk download...")
 
     end_date   = datetime.utcnow().date()
-    start_date = end_date - timedelta(weeks=52)
+    start_date = end_date - timedelta(weeks=26)
 
     # Step 1: Request the download
     # agencies is required — "all" means no agency filter applied
@@ -61,6 +61,7 @@ def fetch_usaspending_download() -> list:
                     "end_date":   str(end_date),
                 },
                 "place_of_performance_locations": [{"country": "USA", "state": "TX"}],
+                "keyword": "construction",
             },
         },
         timeout=60,
@@ -73,8 +74,8 @@ def fetch_usaspending_download() -> list:
 
     # Step 2: Poll until the file is ready (max 10 minutes)
     if status_url:
-        for attempt in range(60):
-            time.sleep(10)
+        for attempt in range(80):
+            time.sleep(15)
             sr = requests.get(status_url, timeout=30)
             sr.raise_for_status()
             sb    = sr.json()
