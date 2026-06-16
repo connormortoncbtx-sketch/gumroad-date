@@ -148,21 +148,19 @@ def fetch_usaspending_contracts() -> list:
 def fetch_sam_vendors() -> list:
     """
     Fetch active SAM.gov vendor registrations for Texas construction firms.
-    Uses the public SAM.gov Entity Management API (no key required for basic fields).
+    SAM.gov public API v2 — no key required for basic fields (100 req/day limit).
     """
     log.info("Fetching SAM.gov vendor registrations...")
-    url = "https://api.sam.gov/entity-information/v3/entities"
+    url = "https://api.sam.gov/entity-information/v2/entities"
     params = {
-        "samRegistered": "Yes",
+        "samRegistered":                      "Yes",
         "physicalAddressStateOrProvinceCode": "TX",
-        "primaryNaics": ",".join(CONSTRUCTION_NAICS[:8]),   # limit to keep response fast
-        "entityStructureCode": "2L",   # corporate entity
-        "registrationStatus": "A",     # active
-        "purposeOfRegistrationCode": "Z2",  # federal contracts and grants
-        "api_key": "DEMO_KEY",   # public demo key — 40 req/hr, swap for real key if needed
-        "fields": "entityRegistration,coreData",
-        "limit": 100,
-        "offset": 0,
+        "entityStructureCode":                "2L",
+        "registrationStatus":                 "A",
+        "purposeOfRegistrationCode":          "Z2",
+        "api_key":                            "DEMO_KEY",
+        "limit":                              10,    # keep low on DEMO_KEY rate limit
+        "offset":                             0,
     }
     try:
         resp = requests.get(url, params=params, timeout=30)
@@ -172,7 +170,7 @@ def fetch_sam_vendors() -> list:
         log.info(f"SAM.gov vendors: {len(entities)} records")
         return entities
     except Exception as e:
-        log.warning(f"SAM.gov fetch failed (non-critical): {e}")
+        log.warning(f"SAM.gov fetch failed (non-critical, skipping): {e}")
         return []
 
 
@@ -182,17 +180,19 @@ def fetch_austin_permits() -> list:
     """
     Austin construction permits via Socrata SODA.
     Dataset: 3syk-w9eu — Issued Construction Permits
+    Actual API field names confirmed from dataset CSV export.
     """
     log.info("Fetching Austin construction permits...")
 
-    since = (datetime.utcnow() - timedelta(weeks=52)).strftime("%Y-%m-%dT00:00:00")
+    # Socrata floating_timestamp requires quotes and no T suffix for $where
+    since = (datetime.utcnow() - timedelta(weeks=52)).strftime("%Y-%m-%d")
     url = "https://data.austintexas.gov/resource/3syk-w9eu.json"
     params = {
-        "$where": f"issued_date >= '{since}'",
+        "$where":  f"issued_date >= '{since}'",
         "$select": (
-            "permitnum,permit_type_desc,work_desc,issued_date,"
-            "total_job_valuation,total_sq_ft,latitude,longitude,"
-            "address,zip,council_district,permit_class_mapped"
+            "permit_num,permit_type_desc,description,issued_date,"
+            "total_job_valuation,total_new_add_sqft,latitude,longitude,"
+            "original_address_1,original_zip,council_district,permit_class_mapped"
         ),
         "$order": "issued_date DESC",
     }

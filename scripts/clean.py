@@ -112,16 +112,16 @@ def clean_contracts(raw: list) -> pd.DataFrame:
 # Unified column mapping: source_field -> standard_field per city
 PERMIT_MAPS = {
     "Austin": {
-        "permitnum":            "permit_id",
+        "permit_num":           "permit_id",
         "permit_type_desc":     "permit_type",
-        "work_desc":            "description",
+        "description":          "description",
         "issued_date":          "issued_date",
         "total_job_valuation":  "valuation_usd",
-        "total_sq_ft":          "sq_ft",
+        "total_new_add_sqft":   "sq_ft",
         "latitude":             "lat",
         "longitude":            "lon",
-        "address":              "address",
-        "zip":                  "zip",
+        "original_address_1":   "address",
+        "original_zip":         "zip",
         "council_district":     "district",
         "permit_class_mapped":  "permit_class",
     },
