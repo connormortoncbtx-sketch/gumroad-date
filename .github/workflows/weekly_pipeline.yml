@@ -48,19 +48,6 @@ jobs:
             reports/
           retention-days: 90
 
-      - name: Collect release files
-        id: files
-        run: |
-          FILES="data/clean/tx_contracts_${{ steps.date.outputs.DATE }}.csv"
-          FILES="$FILES data/clean/summary_${{ steps.date.outputs.DATE }}.json"
-          FILES="$FILES reports/TX_Construction_Intel_${{ steps.date.outputs.DATE }}.pdf"
-          # Only include permits file if it exists
-          PERMITS="data/clean/tx_permits_${{ steps.date.outputs.DATE }}.csv"
-          if [ -f "$PERMITS" ]; then
-            FILES="$FILES $PERMITS"
-          fi
-          echo "files=$FILES" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release with data files
         uses: softprops/action-gh-release@v2
         with:
@@ -75,7 +62,10 @@ jobs:
             - `TX_Construction_Intel_*.pdf` — Weekly PDF digest (Tier 3)
 
             **Data source:** USASpending.gov federal contract awards API
-          files: ${{ steps.files.outputs.files }}
+          files: |
+            data/clean/tx_contracts_${{ steps.date.outputs.DATE }}.csv
+            data/clean/summary_${{ steps.date.outputs.DATE }}.json
+            reports/TX_Construction_Intel_${{ steps.date.outputs.DATE }}.pdf
           draft: false
           prerelease: false
         env:
