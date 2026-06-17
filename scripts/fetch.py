@@ -44,10 +44,13 @@ def fetch_usaspending_download() -> list:
     log.info("Requesting USASpending bulk download...")
 
     end_date   = datetime.utcnow().date()
-    start_date = end_date - timedelta(weeks=26)
+    start_date = end_date - timedelta(weeks=52)
 
     # Step 1: Request the download
     # agencies is required — "all" means no agency filter applied
+    # No keyword filter — we filter by NAICS code in clean.py instead,
+    # since keyword search on description text misses valid construction
+    # contracts that don't literally say "construction" (e.g. "bridge repair")
     resp = requests.post(
         "https://api.usaspending.gov/api/v2/bulk_download/awards/",
         json={
@@ -61,7 +64,6 @@ def fetch_usaspending_download() -> list:
                     "end_date":   str(end_date),
                 },
                 "place_of_performance_locations": [{"country": "USA", "state": "TX"}],
-                "keyword": "construction",
             },
         },
         timeout=60,

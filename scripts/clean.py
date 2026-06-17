@@ -193,6 +193,12 @@ def clean_contracts(raw: list) -> pd.DataFrame:
 
     df = df.reset_index(drop=True)
     log.info(f"Contracts after cleaning: {len(df):,} rows")
+    if "perf_county" in df.columns:
+        nonblank = (df["perf_county"].str.strip() != "").sum()
+        log.info(f"perf_county populated: {nonblank}/{len(df)} rows")
+    if "perf_city" in df.columns:
+        nonblank = (df["perf_city"].str.strip() != "").sum()
+        log.info(f"perf_city populated: {nonblank}/{len(df)} rows")
     if "obligation_usd" in df.columns:
         log.info(f"Total obligation value: ${df['obligation_usd'].sum():,.0f}")
 
